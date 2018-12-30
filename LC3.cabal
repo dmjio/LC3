@@ -1,0 +1,28 @@
+name:                LC3
+version:             0.1.0.0
+synopsis:            LC-3 virtual machine
+description:         Haskell implementation of the LC-3 VM
+license:             BSD3
+license-file:        LICENSE
+author:              David Johnson
+maintainer:          djohnson.m@gmail.com
+copyright:           David Johnson (c) 2019
+category:            Language
+build-type:          Simple
+extra-source-files:  ChangeLog.md
+cabal-version:       >=1.10
+
+executable LC3
+  main-is:
+    Main.hs
+  build-depends:
+    base,
+    bytestring,
+    lens,
+    hspec,
+    mtl,
+    vector
+  hs-source-dirs:
+    src
+  default-language:
+    Haskell2010
