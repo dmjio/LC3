@@ -1,5 +1,5 @@
-{-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ViewPatterns               #-}
+{-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE PolyKinds                  #-}
 {-# LANGUAGE DataKinds                  #-}
@@ -43,7 +43,7 @@ data R
   | R6
   | R7
   | PC
-  | COND
+  | Cond
   | Count
   deriving (Eq, Show, Enum)
 
@@ -63,7 +63,18 @@ data Machine
   = Machine
   { _machineReg :: Registers 11
   , _machineMem :: Memory 65536
+  , _machineStatus :: Status
   }
+
+status :: Lens' Machine Status
+status =
+  lens _machineStatus $ \p x ->
+    p { _machineStatus = x }
+
+data Status
+  = Running
+  | Halt
+  deriving (Show, Eq)
 
 reg :: R -> Lens' Machine Word16
 reg r = machineReg . reg' r
@@ -168,9 +179,9 @@ updateFlags :: R -> Routine ()
 updateFlags r = do
   x <- use (reg r)
   case x of
-    z | z == 0 -> reg COND .= zro
-      | z ^. bitAt 15 -> reg COND .= neg
-      | otherwise -> reg COND .= pos
+    z | z == 0 -> reg Cond .= zro
+      | z ^. bitAt 15 -> reg Cond .= neg
+      | otherwise -> reg Cond .= pos
 
 swap16 :: Bits a => a -> a
 swap16 x = x `shiftL` 8 .|. x `shiftR` 8
@@ -187,11 +198,16 @@ io = liftIO
 routine :: Routine ()
 routine = do
   reg PC .= 0x3000
-  reg PC += 1
+  fix $ \go -> do
+    s <- use status
+    unless (s == Halt) $ do
+      reg PC += 1
+      loop >> go
+
+loop :: Routine ()
+loop = do
   instr <- memRead =<< use (reg PC)
   let immMode = instr ^. bitAt 5
-  liftIO $ print (getOp instr)
-  liftIO $ print immMode
   case getOp instr of
     ADD -> do
       let r0 = toE $ (instr `shiftR` 9) .&. 0x7
@@ -238,19 +254,32 @@ routine = do
       let r0 = toE $ (instr `shiftR` 9) .&. 0x7
           r1 = toE $ (instr `shiftR` 6) .&. 0x7
       r1' <- use (reg r1)
-      reg r0 .= negate r1'
+      reg r0 .= complement r1'
     BR -> do
       let condFlag = (instr `shiftR` 9) .&. 0x7
           pcOffset = signExtend (instr .&. 0x1ff) 9
-      rCond <- use (reg COND)
+      rCond <- use (reg Cond)
       when (condFlag .&. rCond /= 0) $
         reg PC += pcOffset
     JMP -> do
       let r1 = toE $ (instr `shiftR` 6) .&. 0x7
       r1' <- use (reg r1)
       reg PC .= r1'
-    JSR ->
-      pure ()
+    JSR -> do
+      let r1 = toE $ (instr `shiftR` 6) .&. 0x7
+          longPCOffset = signExtend (instr .&. 0x7ff) 11
+          longFlag = (instr `shiftR` 11) .&. 1
+      pc <- use (reg PC)
+      reg R7 .= pc
+      if longFlag == 1
+        then reg PC += longPCOffset
+        else reg PC .= r1
+    TRAP -> do
+      case instr .&. 0xFF of
+        t | trapGetc == t -> pure ()
+          | trapHalt == t -> do
+              liftIO (putStrLn "HALT")
+              status .= Halt
 
 pcStart :: Int
 pcStart = fromIntegral 0x3000
@@ -258,7 +287,27 @@ pcStart = fromIntegral 0x3000
 runRoutine :: Machine -> Routine () -> IO Machine
 runRoutine = flip execStateT
 
--- some tests
+-- in the trap
+
+trapGetc :: Word16
+trapGetc = 0x20  --  /* get character from keyboard */
+
+trapOut :: Word16
+trapOut = 0x21   --  /* output a character */
+
+trapPuts :: Word16
+trapPuts = 0x22  --  /* output a word string */
+
+trapIn :: Word16
+trapIn = 0x23    --  /* input a string */
+
+trapPutsp :: Word16
+trapPutsp = 0x24 --  /* output a byte string */
+
+trapHalt :: Word16
+trapHalt = 0x25  --  /* halt the program */
+
+-- | some tests
 
 tests :: Spec
 tests = do
@@ -271,13 +320,14 @@ tests = do
 
 complementNumber :: SpecWith ()
 complementNumber =
-  it "Should NOT number" $ do
+  it "Should NOT (complement) a number" $ do
     r <- runRoutine ma routine
     r ^. reg R5 `shouldBe` (-2)
       where
-        ma = Machine rs me
+        ma = Machine rs me Running
         me = memory
            & mem' 0x3001 .~ 0b1001101011000100
+           & mem' 0x3002 .~ haltInstr
         rs = registers
            & reg' R3 .~ 1
 
@@ -287,9 +337,10 @@ andTwoNumbers =
     r <- runRoutine ma routine
     r ^. reg R5 `shouldBe` 0
       where
-        ma = Machine rs me
+        ma = Machine rs me Running
         me = memory
            & mem' 0x3001 .~ 0b0101101011000100
+           & mem' 0x3002 .~ haltInstr
         rs = registers
            & reg' R3 .~ 5
            & reg' R4 .~ 2
@@ -300,9 +351,10 @@ andTwoNumbersImm =
     r <- runRoutine ma routine
     r ^. reg R5 `shouldBe` 1
       where
-        ma = Machine rs me
+        ma = Machine rs me Running
         me = memory
            & mem' 0x3001 .~ 0b0101101011111111
+           & mem' 0x3002 .~ haltInstr
         rs = registers
            & reg' R3 .~ 1
 
@@ -312,9 +364,10 @@ addTwoNumbers =
     r <- runRoutine ma routine
     r ^. reg R5 `shouldBe` 2
       where
-        ma = Machine rs me
+        ma = Machine rs me Running
         me = memory
            & mem' 0x3001 .~ 0b0001101011000100
+           & mem' 0x3002 .~ haltInstr
         rs = registers
            & reg' R3 .~ 1
            & reg' R4 .~ 1
@@ -325,10 +378,13 @@ addTwoNumbersImm =
     r <- runRoutine ma routine
     r ^. reg R5 `shouldBe` 32
       where
-        ma = Machine rs me
+        ma = Machine rs me Running
         me = memory
            & mem' 0x3001 .~ 0b0001101011111111
+           & mem' 0x3002 .~ haltInstr
         rs = registers
            & reg' R3 .~ 1
+
+haltInstr = 0b1111000000100101
 
 -- k' = signExtend (0b0001101011111111 .&. 0x1F) 5
