@@ -1,3 +1,5 @@
+{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE PolyKinds                  #-}
 {-# LANGUAGE DataKinds                  #-}
@@ -12,10 +14,15 @@ import           Control.Lens
 import           Control.Monad.State
 import           Data.Bits
 import           Data.Bits.Lens
+import           Data.Bool
+import           Data.ByteString     (ByteString)
+import qualified Data.ByteString     as B
+import           Data.List
 import           Data.Vector         (Vector)
 import qualified Data.Vector         as V
 import           Data.Word
 import           GHC.TypeLits
+import           System.IO
 import           Test.Hspec
 
 newtype Memory (size :: Nat)
@@ -40,17 +47,37 @@ data R
   | Count
   deriving (Eq, Show, Enum)
 
-reg :: R -> Lens' (Registers (nat :: Nat)) Word16
-reg n = lens (\(Registers v) -> v V.! fromEnum n) setter
+reg' :: R -> Lens' (Registers (nat :: Nat)) Word16
+reg' n = lens (\(Registers v) -> v V.! fromEnum n) setter
   where
     setter (Registers vec) word16 =
       Registers $ vec V.// [(fromEnum n, word16)]
 
-mem :: Int -> Lens' (Memory (nat :: Nat)) Word16
-mem n = lens (\(Memory v) -> v V.! n) setter
+mem' :: Int -> Lens' (Memory (nat :: Nat)) Word16
+mem' n = lens (\(Memory v) -> v V.! n) setter
   where
     setter (Memory vec) word16 =
       Memory $ vec V.// [(n, word16)]
+
+data Machine
+  = Machine
+  { _machineReg :: Registers 11
+  , _machineMem :: Memory 65536
+  }
+
+reg :: R -> Lens' Machine Word16
+reg r = machineReg . reg' r
+
+mem :: Int -> Lens' Machine Word16
+mem n = machineMem . mem' n
+
+machineReg :: Lens' Machine (Registers 11)
+machineReg =
+  lens _machineReg (\m r -> m { _machineReg = r })
+
+machineMem :: Lens' Machine (Memory 65536)
+machineMem =
+  lens _machineMem (\m r -> m { _machineMem = r })
 
 registers :: Registers 11
 registers = Registers (V.replicate 11 0x0)
@@ -80,34 +107,61 @@ data OpCode
   | TRAP -- /* execute trap */
   deriving (Eq, Ord, Show, Enum)
 
+type Addr = Word16
+type Val  = Word16
+
+memWrite :: Addr -> Val -> Routine ()
+memWrite addr val = mem (fromIntegral addr) .= val
+
+getKey :: IO Char
+getKey = getChar
+
+checkKey :: IO (Maybe Word16)
+checkKey = do
+  result <- B.hGetNonBlocking stdin 2
+  pure $ case result of
+    x | B.null x -> Nothing
+      | otherwise -> do
+          let [l,r] = B.unpack x
+          Just $ foldl' (go (l,r)) 0x0 [0..15]
+        where
+          go (l,r) x n
+            | n < 8 = setBit x (bool 0 1 (testBit r n))
+            | otherwise = setBit x (bool 0 1 (testBit l n))
+
+memRead :: Addr -> Routine Val
+memRead (fromIntegral -> addr)
+  | addr == mrKBSR = handleKey
+  | otherwise = use $ mem addr
+    where
+      handleKey = do
+        maybeKey <- liftIO checkKey
+        case maybeKey of
+          Just key -> do
+            mem mrKBSR .= 1 `shiftL` 15
+            mem mrKBDR .= key
+          Nothing ->
+            mem mrKBSR .= 0x0
+        use (mem addr)
+
+mrKBSR = 0xFE00 -- /* keyboard status */
+mrKBDR = 0xFE02 -- /* keyboard data */
+
 pos, zro, neg :: Word16
 pos = 1
 zro = 2
 neg = 4
 
 main :: IO ()
-main = print ("foo" :: String)
+main = hspec tests
 
--- data RoutineState
---   = RoutineState
---   { _rsMemory :: Memory 65536
---   , _rsRegisters :: Registers 11
---   } deriving (Show, Eq)
--- makeLenses ''RoutineState
-
-type Routine a = StateT (Registers 11) IO a
-
-memRead :: Word16 -> Routine Word16
-memRead = const (pure x)
-  where
-    x :: Word16
-    --  9876543210
-    x = 0b0001101011100011
+type Routine = StateT Machine IO
 
 signExtend :: Word16 -> Int -> Word16
 signExtend x bitCount
-  | x `shiftR` (bitCount - 1) .&. 1 == 1
-    = x .|. (0xFFFF `shiftL` bitCount)
+  -- shiftL or shiftR? that is the question...
+  | x `shiftL` (bitCount - 1) .&. 1 == 1
+  = x .|. (0xFFFF `shiftL` bitCount)
   | otherwise = x
 
 updateFlags :: R -> Routine ()
@@ -118,19 +172,26 @@ updateFlags r = do
       | z ^. bitAt 15 -> reg COND .= neg
       | otherwise -> reg COND .= pos
 
+swap16 :: Bits a => a -> a
+swap16 x = x `shiftL` 8 .|. x `shiftR` 8
+
 toE :: Enum e => Word16 -> e
 toE = toEnum . fromIntegral
 
 getOp :: Word16 -> OpCode
 getOp x = toE (x `shiftR` 12)
 
+io :: MonadIO m => IO a -> m a
+io = liftIO
+
 routine :: Routine ()
 routine = do
   reg PC .= 0x3000
   reg PC += 1
-  x <- use (reg PC)
-  instr <- memRead x
+  instr <- memRead =<< use (reg PC)
   let immMode = instr ^. bitAt 5
+  liftIO $ print (getOp instr)
+  liftIO $ print immMode
   case getOp instr of
     ADD -> do
       let r0 = toE $ (instr `shiftR` 9) .&. 0x7
@@ -138,8 +199,8 @@ routine = do
       if immMode
         then do
           let imm5 = signExtend (instr .&. 0x1F) 5
-          r1' <- use (reg r1)
-          reg r0 .= r1' + imm5
+          result <- (imm5+) <$> use (reg r1)
+          reg r0 .= result
         else do
           let r2 = toE (instr .&. 0x7)
           r1' <- use (reg r1)
@@ -147,10 +208,18 @@ routine = do
           reg r0 .= r1' + r2'
       updateFlags r0
     LDI -> do
-      let r0 = toE $ (instr `shiftR` 9) .&. 0x7
+      let dr = toE $ (instr `shiftR` 9) .&. 0x7
           pcOffset = signExtend (instr .&. 0x1ff) 9
-      -- reg[r0] = mem_read(mem_read(reg[R_PC] + pc_offset));
-      updateFlags r0
+      -- reg[r0] = mem_read(mem_read(reg[R_PC] + pc_offset))
+      pcVal <- use (reg PC)
+      r <- use . mem . fromIntegral =<< do
+        use $ mem (fromIntegral (pcVal + pcOffset))
+      reg dr .= r
+      updateFlags dr
+    RTI ->
+      pure ()
+    RES ->
+      pure ()
     AND -> do
       let r0 = toE $ (instr `shiftR` 9) .&. 0x7
           r1 = toE $ (instr `shiftR` 6) .&. 0x7
@@ -180,17 +249,73 @@ routine = do
       let r1 = toE $ (instr `shiftR` 6) .&. 0x7
       r1' <- use (reg r1)
       reg PC .= r1'
-    JSR -> do
+    JSR ->
       pure ()
 
-runRoutine :: Routine () -> IO (Registers 11)
-runRoutine = flip execStateT $
-  registers & reg R3 .~ 1
-            & reg R4 .~ 1
+pcStart :: Int
+pcStart = fromIntegral 0x3000
+
+runRoutine :: Machine -> Routine () -> IO Machine
+runRoutine = flip execStateT
+
+-- some tests
 
 tests :: Spec
 tests = do
-  describe "vm tests" $ do
-    it "should add two numbers" $ do
-      r <- runRoutine routine
-      r ^. reg R5 `shouldBe` 2
+  describe "VM tests" $ do
+    addTwoNumbers
+    addTwoNumbersImm
+    andTwoNumbers
+    andTwoNumbersImm
+
+andTwoNumbers :: SpecWith ()
+andTwoNumbers =
+  it "Should AND two numbers" $ do
+    r <- runRoutine ma routine
+    r ^. reg R5 `shouldBe` 0
+      where
+        ma = Machine rs me
+        me = memory
+           & mem' 0x3001 .~ 0b0101101011000100
+        rs = registers
+           & reg' R3 .~ 5
+           & reg' R4 .~ 2
+
+andTwoNumbersImm :: SpecWith ()
+andTwoNumbersImm =
+  it "Should AND two numbers w/ immediate" $ do
+    r <- runRoutine ma routine
+    r ^. reg R5 `shouldBe` 1
+      where
+        ma = Machine rs me
+        me = memory
+           & mem' 0x3001 .~ 0b0101101011111111
+        rs = registers
+           & reg' R3 .~ 1
+
+addTwoNumbers :: SpecWith ()
+addTwoNumbers =
+  it "Should ADD two numbers" $ do
+    r <- runRoutine ma routine
+    r ^. reg R5 `shouldBe` 2
+      where
+        ma = Machine rs me
+        me = memory
+           & mem' 0x3001 .~ 0b0001101011000100
+        rs = registers
+           & reg' R3 .~ 1
+           & reg' R4 .~ 1
+
+addTwoNumbersImm :: SpecWith ()
+addTwoNumbersImm =
+  it "Should ADD two numbers w/ immediate" $ do
+    r <- runRoutine ma routine
+    r ^. reg R5 `shouldBe` 32
+      where
+        ma = Machine rs me
+        me = memory
+           & mem' 0x3001 .~ 0b0001101011111111
+        rs = registers
+           & reg' R3 .~ 1
+
+-- k' = signExtend (0b0001101011111111 .&. 0x1F) 5
