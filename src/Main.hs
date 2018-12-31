@@ -202,9 +202,8 @@ type Routine = StateT Machine IO
 
 signExtend :: Word16 -> Int -> Word16
 signExtend x bitCount
-  -- shiftL or shiftR? that is the question...
-  | x `shiftL` (bitCount - 1) .&. 1 == 1
-  = x .|. (0xFFFF `shiftL` bitCount)
+  | (x `shiftL` (bitCount - 1)) .&. 1 == 1
+  = x .|. (0xFFFF `shiftR` bitCount)
   | otherwise = x
 
 updateFlags :: R -> Routine ()
