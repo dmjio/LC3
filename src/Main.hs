@@ -378,6 +378,12 @@ loop = do
           | trapHalt == t -> do
               liftIO (putStrLn "HALT")
               status .= Halt
+          | otherwise -> do
+              liftIO $ do
+                print (getOp instr)
+                print instr
+                exitFailure
+
 
 pcStart :: Int
 pcStart = fromIntegral 0x3000
