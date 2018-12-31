@@ -126,8 +126,8 @@ checkKey = do
           Just $ foldl' (go (l,r)) 0x0 [0..15]
         where
           go (l,r) x n
-            | n < 8 = setBit x (bool 0 1 (testBit r n))
-            | otherwise = setBit x (bool 0 1 (testBit l n))
+            | n < 8 = setBit x $ popCount (testBit r n)
+            | otherwise = setBit x $ popCount (testBit l n)
 
 memRead :: Addr -> Routine Val
 memRead (fromIntegral -> addr)
@@ -267,6 +267,19 @@ tests = do
     addTwoNumbersImm
     andTwoNumbers
     andTwoNumbersImm
+    complementNumber
+
+complementNumber :: SpecWith ()
+complementNumber =
+  it "Should NOT number" $ do
+    r <- runRoutine ma routine
+    r ^. reg R5 `shouldBe` (-2)
+      where
+        ma = Machine rs me
+        me = memory
+           & mem' 0x3001 .~ 0b1001101011000100
+        rs = registers
+           & reg' R3 .~ 1
 
 andTwoNumbers :: SpecWith ()
 andTwoNumbers =
