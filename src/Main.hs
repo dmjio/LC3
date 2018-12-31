@@ -358,6 +358,16 @@ makeBr instr = do
       pcOffset = signExtend (instr .&. 0x1ff) 9
   Br condFlag pcOffset
 
+data Jmp
+  = Jmp
+  { jrDr :: R
+  } deriving (Show, Eq)
+
+makeJmp :: Word16 -> Jmp
+makeJmp instr = do
+  let r1 = toE $ (instr `shiftR` 6) .&. 0x7
+  Jmp r1
+
 go :: Routine ()
 go = do
   instr <- memRead =<< use (reg PC)
@@ -409,10 +419,12 @@ go = do
           rCond <- use (reg Cond)
           when (rcCond .&. rCond > 0)
             (reg PC += pcOffset)
-    JMP -> do
-      let r1 = toE $ (instr `shiftR` 6) .&. 0x7
-      r1' <- use (reg r1)
-      reg PC .= r1'
+    JMP ->
+      case makeJmp instr of
+        Jmp r -> do
+          r1 <- use (reg r)
+          reg PC .= r1
+          go
     JSR -> do
       let r1 = toE $ (instr `shiftR` 6) .&. 0x7
           longPCOffset = signExtend (instr .&. 0x7ff) 11
