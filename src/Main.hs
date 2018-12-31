@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ViewPatterns               #-}
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE RankNTypes                 #-}
@@ -26,6 +27,7 @@ import           Data.Vector         (Vector)
 import qualified Data.Vector         as V
 import           Data.Word
 import           GHC.TypeLits
+import           Numeric
 import           System.Environment
 import           System.Exit
 import           System.IO
@@ -38,6 +40,28 @@ newtype Memory (size :: Nat)
 newtype Registers (size :: Nat)
   = Registers { _reg :: Vector Word16 }
  deriving (Show, Eq)
+
+merge :: Word8 -> Word8 -> Word16
+merge l r = foldl' go 0x0 (zip [15,14..0] bits)
+  where
+    go acc (n,True) = setBit acc n
+    go acc (n,False) = acc
+    bits =
+      map (testBit l) [7,6..0] ++
+      map (testBit r) [7,6..0]
+
+-- | Combine two-byte chunks into Word16
+processBits :: [Word8] -> [Word16]
+processBits bytes = map go (chunks 2 bytes)
+  where
+    go [_] = error "odd number"
+    go [x,y] = merge x y
+
+chunks :: Int -> [a] -> [[a]]
+chunks _ [] = []
+chunks n xs = do
+  let (l,r) = splitAt n xs
+  l : chunks n r
 
 data R
   = R0
@@ -137,12 +161,12 @@ getKey = getChar
 
 checkKey :: IO (Maybe Word16)
 checkKey = do
-  result <- B.hGetNonBlocking stdin 2
-  pure $ case result of
-    x | B.null x -> Nothing
+  result <- B.hGet stdin 2
+  case result of
+    x | B.null x -> pure Nothing
       | otherwise -> do
           let [l,r] = B.unpack x
-          Just $ foldl' (go (l,r)) 0x0 [0..15]
+          pure $ Just $ (merge l r)
         where
           go (l,r) x n
             | n < 8 = setBit x $ popCount (testBit r n)
@@ -184,13 +208,13 @@ readImageFile = do
   args <- getArgs
   case args of
     fileName : _ -> do
-      (swap16 . fromIntegral -> origin) : (map (swap16 . fromIntegral) -> bytes)
-        <- B.unpack <$> B.readFile fileName
+      (origin:bytes) <- processBits . B.unpack <$> B.readFile fileName
       let pad = V.replicate (fromIntegral origin - 1) (0x0 :: Word16)
-          mid = V.fromList bytes
-          end = V.replicate (65536 - (V.length pad + V.length mid)) (0x0 :: Word16)
-      -- mapM_ print (fmap getOp mid)
-      pure $ Memory (pad <> (V.singleton origin <> mid) <> end)
+          mid = V.fromList (origin:bytes)
+          end = V.replicate
+            (65536 - (V.length pad + V.length mid)) (0x0 :: Word16)
+      -- V.mapM_ print $ (fmap getOp mid)
+      pure $ Memory (pad <> mid <> end)
     _ -> do
       putStrLn "Please enter path to LC3 program"
       exitFailure
@@ -229,73 +253,162 @@ io = liftIO
 routine :: Routine ()
 routine = do
   reg PC .= 0x3000
-  fix $ \go -> do
+  fix $ \loop -> do
     s <- use status
     unless (s == Halt) $ do
+      go
       reg PC += 1
-      loop >> go
+      loop
 
-loop :: Routine ()
-loop = do
+dumpRegisters :: Routine ()
+dumpRegisters = do
+  instr <- memRead =<< use (reg PC)
+  Registers r <- gets _machineReg
+  liftIO $ do
+    putStrLn (showHexAndBinary instr)
+    V.mapM_ (\(n,x) -> putStrLn $ show (toEnum n :: R) ++ ": 0x" ++ showHex x "")
+      (V.zip (V.fromList [0..10]) r)
+    putStrLn mempty
+
+debug :: Bool
+debug = False
+
+showBinary :: Word16 -> String
+showBinary x = "0b" ++ showIntAtBase 2 (head . show) x ""
+
+showHexAndBinary :: Word16 -> String
+showHexAndBinary instr =
+  show (getOp instr) ++ " -> 0x" ++ showHex instr "" ++ " " ++ showBinary instr
+
+data Add
+  = Add
+  { dr :: R
+  , sr1 :: R
+  , sr2 :: R
+  } | AddImm
+  { dr :: R
+  , sr1 :: R
+  , imm :: Word16
+  } deriving (Show, Eq)
+
+makeAdd :: Word16 -> Add
+makeAdd instr = do
+  let dr = toE $ (instr `shiftR` 9) .&. 0x7
+      sr1 = toE $ (instr `shiftR` 6) .&. 0x7
+      sr2 = toE $ instr .&. 0x7
+      imm = signExtend (instr .&. 0x1F) 5
+  if instr ^. bitAt 5
+    then AddImm dr sr1 imm
+    else Add dr sr1 sr2
+
+data Ldi
+  = Ldi
+  { ldiDR :: R
+  , ldiPcOffset :: Word16
+  } deriving (Show, Eq)
+
+makeLdi :: Word16 -> Ldi
+makeLdi instr = do
+  let r0 = toE $ (instr `shiftR` 9) .&. 0x7
+      pcOffset = signExtend (instr .&. 0x1ff) 9
+  Ldi r0 pcOffset
+
+data And
+  = And
+  { addDr :: R
+  , addSr1 :: R
+  , addSr2 :: R
+  } | AndImm
+  { addDr :: R
+  , addSr1 :: R
+  , addImm :: Word16
+  } deriving (Show, Eq)
+
+makeAnd :: Word16 -> And
+makeAnd instr = do
+  let dr = toE $ (instr `shiftR` 9) .&. 0x7
+      sr1 = toE $ (instr `shiftR` 6) .&. 0x7
+      sr2 = toE (instr .&. 0x7)
+      imm = signExtend (instr .&. 0x1F) 5
+  if instr ^. bitAt 5
+    then AndImm dr sr1 imm
+    else And dr sr1 sr2
+
+data Not
+  = Not
+  { notDr :: R
+  , notSr :: R
+  } deriving (Show, Eq)
+
+makeNot :: Word16 -> Not
+makeNot instr = do
+  let dr = toE $ (instr `shiftR` 9) .&. 0x7
+      sr = toE $ (instr `shiftR` 6) .&. 0x7
+  Not dr sr
+
+data Br
+  = Br
+  { brCondFlag :: Word16
+  , brPcOffset :: Word16
+  } deriving (Show, Eq)
+
+makeBr :: Word16 -> Br
+makeBr instr = do
+  let condFlag = (instr `shiftR` 9) .&. 0x7
+      pcOffset = signExtend (instr .&. 0x1ff) 9
+  Br condFlag pcOffset
+
+go :: Routine ()
+go = do
   instr <- memRead =<< use (reg PC)
   let immMode = instr ^. bitAt 5
-  liftIO $ print (getOp instr)
+  pc <- use (reg PC)
+  when debug dumpRegisters
   case getOp instr of
     ADD -> do
-      let r0 = toE $ (instr `shiftR` 9) .&. 0x7
-          r1 = toE $ (instr `shiftR` 6) .&. 0x7
-      if immMode
-        then do
-          let imm5 = signExtend (instr .&. 0x1F) 5
-          result <- (imm5+) <$> use (reg r1)
-          reg r0 .= result
-          pc <- use (reg PC)
-          liftIO $ print (pc, instr, ADD, imm5, result - imm5, r0)
-        else do
-          let r2 = toE (instr .&. 0x7)
-          r1' <- use (reg r1)
-          r2' <- use (reg r2)
-          reg r0 .= r1' + r2'
-          pc <- use (reg PC)
-          liftIO $ print (pc, instr, ADD, r1', r2', r0)
-      updateFlags r0
+      case makeAdd instr of
+        AddImm dr sr1 imm -> do
+          result <- (imm+) <$> use (reg sr1)
+          reg dr .= result
+          updateFlags dr
+        Add dr sr1 sr2 -> do
+          r1 <- use (reg sr1)
+          r2 <- use (reg sr2)
+          reg dr .= r1 + r2
+          updateFlags dr
     LDI -> do
-      let r0 = toE $ (instr `shiftR` 9) .&. 0x7
-          pcOffset = signExtend (instr .&. 0x1ff) 9
-      -- reg[r0] = mem_read(mem_read(reg[R_PC] + pc_offset))
-      pcVal <- use (reg PC)
-      r <- memRead =<< memRead (pcVal + pcOffset)
-      reg r0 .= r
-      updateFlags r0
+      case makeLdi instr of
+        Ldi dr pcOffset -> do
+          pcVal <- use (reg PC)
+          r <- memRead =<< memRead (pcVal + pcOffset)
+          reg dr .= r
+          updateFlags dr
     RTI ->
       pure ()
     RES ->
       pure ()
-    AND -> do
-      let r0 = toE $ (instr `shiftR` 9) .&. 0x7
-          r1 = toE $ (instr `shiftR` 6) .&. 0x7
-      if immMode
-        then do
-          let imm5 = signExtend (instr .&. 0x1F) 5
-          r1' <- use (reg r1)
-          reg r0 .= r1' .&. imm5
-        else do
-          let r2 = toE (instr .&. 0x7)
-          r1' <- use (reg r1)
-          r2' <- use (reg r2)
-          reg r0 .= r1' .&. r2'
-      updateFlags r0
-    NOT -> do
-      let r0 = toE $ (instr `shiftR` 9) .&. 0x7
-          r1 = toE $ (instr `shiftR` 6) .&. 0x7
-      r1' <- use (reg r1)
-      reg r0 .= complement r1'
-    BR -> do
-      let condFlag = (instr `shiftR` 9) .&. 0x7
-          pcOffset = signExtend (instr .&. 0x1ff) 9
-      rCond <- use (reg Cond)
-      when (condFlag .&. rCond /= 0) $
-        reg PC += pcOffset
+    AND ->
+      case makeAnd instr of
+        AndImm dr sr1 imm -> do
+          r <- use (reg sr1)
+          reg dr .= r .&. imm
+          updateFlags dr
+        And dr sr1 sr2 -> do
+          r1 <- use (reg sr1)
+          r2 <- use (reg sr2)
+          reg dr .= r1 .&. r2
+          updateFlags dr
+    NOT ->
+      case makeNot instr of
+        Not dr sr -> do
+          r <- use (reg sr)
+          reg dr .= complement r
+    BR ->
+      case makeBr instr of
+        Br rcCond pcOffset -> do
+          rCond <- use (reg Cond)
+          when (rcCond .&. rCond > 0)
+            (reg PC += pcOffset)
     JMP -> do
       let r1 = toE $ (instr `shiftR` 6) .&. 0x7
       r1' <- use (reg r1)
@@ -357,6 +470,7 @@ loop = do
               v <- use (reg R0)
               let loop x = do
                     val <- memRead x
+                    liftIO $ putStrLn ("val -> 0x" ++ showHex val "")
                     unless (val == 0x0000) $ do
                       let c = chr (fromIntegral val)
                       liftIO (putChar c)
@@ -370,7 +484,7 @@ loop = do
                       let char1 = chr (fromIntegral (val .&. 0xFF))
                           char2 = chr (fromIntegral (val `shiftR` 8))
                       liftIO $ mapM_ putChar [char1, char2]
-                    loop (x+1)
+                      loop (x+1)
               loop v
           | trapOut == t -> do
               liftIO . putChar =<<
