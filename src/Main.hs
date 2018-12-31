@@ -183,11 +183,13 @@ readImageFile = do
   args <- getArgs
   case args of
     fileName : _ -> do
-      Memory . V.fromList
-             . map swap16
-             . map fromIntegral
-             . B.unpack
-            <$> B.readFile fileName
+      (swap16 . fromIntegral -> origin) : (map (swap16 . fromIntegral) -> bytes)
+        <- B.unpack <$> B.readFile fileName
+      let pad = V.replicate (fromIntegral origin - 1) (0x0 :: Word16)
+          mid = V.fromList bytes
+          end = V.replicate (65536 - (V.length pad + V.length mid)) (0x0 :: Word16)
+      -- mapM_ print (fmap getOp mid)
+      pure $ Memory (pad <> mid <> end)
     _ -> do
       putStrLn "Please enter path to LC3 program"
       exitFailure
@@ -212,7 +214,7 @@ updateFlags r = do
       | z ^. bitAt 15 -> reg Cond .= neg
       | otherwise -> reg Cond .= pos
 
-swap16 :: Bits a => a -> a
+swap16 :: Word16 -> Word16
 swap16 x = x `shiftL` 8 .|. x `shiftR` 8
 
 toE :: Enum e => Word16 -> e
