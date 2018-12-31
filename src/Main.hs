@@ -173,6 +173,7 @@ neg = 4
 
 main :: IO ()
 main = do
+  hSetBuffering stdin NoBuffering
   heap <- readImageFile
   let machine = Machine registers heap Running
   finished <- runRoutine machine routine
