@@ -26,6 +26,8 @@ import           Data.Vector         (Vector)
 import qualified Data.Vector         as V
 import           Data.Word
 import           GHC.TypeLits
+import           System.Environment
+import           System.Exit
 import           System.IO
 import           Test.Hspec
 
@@ -170,7 +172,27 @@ zro = 2
 neg = 4
 
 main :: IO ()
-main = hspec tests
+main = do
+  heap <- readImageFile
+  let machine = Machine registers heap Running
+  finished <- runRoutine machine routine
+  print (finished ^. status)
+
+readImageFile :: IO (Memory 65536)
+readImageFile = do
+  args <- getArgs
+  case args of
+    fileName : _ -> do
+      Memory . V.fromList
+             . map fromIntegral
+             . B.unpack
+            <$> B.readFile fileName
+    _ -> do
+      putStrLn "Please enter path to LC3 program"
+      exitFailure
+
+test :: IO ()
+test = hspec tests
 
 type Routine = StateT Machine IO
 
