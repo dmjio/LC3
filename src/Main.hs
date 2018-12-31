@@ -184,6 +184,7 @@ readImageFile = do
   case args of
     fileName : _ -> do
       Memory . V.fromList
+             . map swap16
              . map fromIntegral
              . B.unpack
             <$> B.readFile fileName
