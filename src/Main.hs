@@ -274,6 +274,23 @@ loop = do
       if longFlag == 1
         then reg PC += longPCOffset
         else reg PC .= r1
+    LD -> do
+      let r0 = toE $ (instr `shiftR` 9) .&. 0x7
+          pcOffset = signExtend (instr .&. 0x1ff) 9
+      pc <- use (reg PC)
+      r <- memRead (pc + pcOffset)
+      reg r0 .= r
+      updateFlags r0
+    LDR -> do
+      let r0 = toE $ (instr `shiftR` 9) .&. 0x7
+          r1 = toE $ (instr `shiftR` 6) .&. 0x7
+          offset = signExtend (instr .&. 0x3F) 6
+      r1' <- use (reg r1)
+      val <- memRead (r1' + offset)
+      reg r0 .= val
+      updateFlags r0
+    LEA ->
+      pure ()
     TRAP -> do
       case instr .&. 0xFF of
         t | trapGetc == t -> pure ()
