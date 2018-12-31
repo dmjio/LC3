@@ -294,8 +294,31 @@ loop = do
       val <- memRead (r1' + offset)
       reg r0 .= val
       updateFlags r0
-    LEA ->
-      pure ()
+    LEA -> do
+      let r0 = toE $ (instr `shiftR` 9) .&. 0x7
+          offset = signExtend (instr .&. 0x1ff) 9
+      pc <- use (reg PC)
+      val <- memRead (pc + offset)
+      reg r0 .= val
+    ST -> do
+      let r0 = toE $ (instr `shiftR` 9) .&. 0x7
+          offset = signExtend (instr .&. 0x1ff) 9
+      pc <- use (reg PC)
+      memWrite (pc + offset) r0
+    STI -> do
+      let r0 = toE $ (instr `shiftR` 9) .&. 0x7
+          offset = signExtend (instr .&. 0x1ff) 9
+      r0' <- use (reg r0)
+      pc <- use (reg PC)
+      val <- memRead (pc + offset)
+      memWrite val r0'
+    STR -> do
+      let r0 = toE $ (instr `shiftR` 9) .&. 0x7
+          r1 = toE $ (instr `shiftR` 6) .&. 0x7
+          offset = signExtend (instr .&. 0x3F) 6
+      r0' <- use (reg r0)
+      r1' <- use (reg r1)
+      memWrite (r1' + offset) r0'
     TRAP -> do
       case instr .&. 0xFF of
         t | trapGetc == t -> pure ()
