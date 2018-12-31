@@ -8,6 +8,8 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE BinaryLiterals             #-}
+{-# LANGUAGE TypeApplications           #-}
+{-# LANGUAGE TypeFamilies               #-}
 module Main where
 
 import           Control.Lens
@@ -18,6 +20,7 @@ import           Data.Bool
 import           Data.ByteString     (ByteString)
 import qualified Data.ByteString     as B
 import           Data.List
+import           Data.Proxy
 import           Data.Vector         (Vector)
 import qualified Data.Vector         as V
 import           Data.Word
@@ -62,7 +65,7 @@ mem' n = lens (\(Memory v) -> v V.! n) setter
 data Machine
   = Machine
   { _machineReg :: Registers 11
-  , _machineMem :: Memory 65536
+  , _machineMem :: Memory 65535
   , _machineStatus :: Status
   }
 
@@ -86,18 +89,20 @@ machineReg :: Lens' Machine (Registers 11)
 machineReg =
   lens _machineReg (\m r -> m { _machineReg = r })
 
-machineMem :: Lens' Machine (Memory 65536)
+machineMem :: Lens' Machine (Memory 65535)
 machineMem =
   lens _machineMem (\m r -> m { _machineMem = r })
 
-registers :: Registers 11
-registers = Registers (V.replicate 11 0x0)
+registers :: forall n . n ~ 11 => Registers n
+registers = Registers (V.replicate n 0x0)
+  where
+    n = fromIntegral $ natVal (Proxy @ n)
 
-memory :: Memory 65536
+memory :: forall n . n ~ 65535 => Memory n
 memory = Memory (V.replicate n 0x0)
   where
     n :: Int
-    n = fromIntegral (maxBound :: Word16)
+    n = fromIntegral $ natVal (Proxy @ n)
 
 data OpCode
   = BR  -- /* branch */
