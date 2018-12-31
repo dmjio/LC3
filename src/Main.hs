@@ -260,14 +260,13 @@ loop = do
           liftIO $ print (pc, instr, ADD, r1', r2', r0)
       updateFlags r0
     LDI -> do
-      let dr = toE $ (instr `shiftR` 9) .&. 0x7
+      let r0 = toE $ (instr `shiftR` 9) .&. 0x7
           pcOffset = signExtend (instr .&. 0x1ff) 9
       -- reg[r0] = mem_read(mem_read(reg[R_PC] + pc_offset))
       pcVal <- use (reg PC)
-      r <- use . mem . fromIntegral =<< do
-        use $ mem (fromIntegral (pcVal + pcOffset))
-      reg dr .= r
-      updateFlags dr
+      r <- memRead =<< memRead (pcVal + pcOffset)
+      reg r0 .= r
+      updateFlags r0
     RTI ->
       pure ()
     RES ->
@@ -329,8 +328,7 @@ loop = do
       let r0 = toE $ (instr `shiftR` 9) .&. 0x7
           offset = signExtend (instr .&. 0x1ff) 9
       pc <- use (reg PC)
-      val <- memRead (pc + offset)
-      reg r0 .= val
+      reg r0 .= pc + offset
     ST -> do
       let r0 = toE $ (instr `shiftR` 9) .&. 0x7
           offset = signExtend (instr .&. 0x1ff) 9
