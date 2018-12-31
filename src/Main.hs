@@ -189,7 +189,7 @@ readImageFile = do
           mid = V.fromList bytes
           end = V.replicate (65536 - (V.length pad + V.length mid)) (0x0 :: Word16)
       -- mapM_ print (fmap getOp mid)
-      pure $ Memory (pad <> mid <> end)
+      pure $ Memory (pad <> (V.singleton origin <> mid) <> end)
     _ -> do
       putStrLn "Please enter path to LC3 program"
       exitFailure
@@ -239,6 +239,7 @@ loop :: Routine ()
 loop = do
   instr <- memRead =<< use (reg PC)
   let immMode = instr ^. bitAt 5
+  liftIO $ print (getOp instr)
   case getOp instr of
     ADD -> do
       let r0 = toE $ (instr `shiftR` 9) .&. 0x7
@@ -248,11 +249,15 @@ loop = do
           let imm5 = signExtend (instr .&. 0x1F) 5
           result <- (imm5+) <$> use (reg r1)
           reg r0 .= result
+          pc <- use (reg PC)
+          liftIO $ print (pc, instr, ADD, imm5, result - imm5, r0)
         else do
           let r2 = toE (instr .&. 0x7)
           r1' <- use (reg r1)
           r2' <- use (reg r2)
           reg r0 .= r1' + r2'
+          pc <- use (reg PC)
+          liftIO $ print (pc, instr, ADD, r1', r2', r0)
       updateFlags r0
     LDI -> do
       let dr = toE $ (instr `shiftR` 9) .&. 0x7
