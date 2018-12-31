@@ -65,7 +65,7 @@ mem' n = lens (\(Memory v) -> v V.! n) setter
 data Machine
   = Machine
   { _machineReg :: Registers 11
-  , _machineMem :: Memory 65535
+  , _machineMem :: Memory 65536
   , _machineStatus :: Status
   }
 
@@ -89,7 +89,7 @@ machineReg :: Lens' Machine (Registers 11)
 machineReg =
   lens _machineReg (\m r -> m { _machineReg = r })
 
-machineMem :: Lens' Machine (Memory 65535)
+machineMem :: Lens' Machine (Memory 65536)
 machineMem =
   lens _machineMem (\m r -> m { _machineMem = r })
 
@@ -98,7 +98,7 @@ registers = Registers (V.replicate n 0x0)
   where
     n = fromIntegral $ natVal (Proxy @ n)
 
-memory :: forall n . n ~ 65535 => Memory n
+memory :: forall n . n ~ 65536 => Memory n
 memory = Memory (V.replicate n 0x0)
   where
     n :: Int
