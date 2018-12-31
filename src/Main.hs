@@ -360,7 +360,7 @@ loop = do
                     unless (val == 0x0000) $ do
                       let c = chr (fromIntegral val)
                       liftIO (putChar c)
-                    loop (x+1)
+                      loop (x+1)
               loop v
           | trapPutsp == t -> do
               v <- use (reg R0)
