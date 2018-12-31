@@ -19,6 +19,7 @@ import           Data.Bits.Lens
 import           Data.Bool
 import           Data.ByteString     (ByteString)
 import qualified Data.ByteString     as B
+import           Data.Char
 import           Data.List
 import           Data.Proxy
 import           Data.Vector         (Vector)
@@ -321,7 +322,34 @@ loop = do
       memWrite (r1' + offset) r0'
     TRAP -> do
       case instr .&. 0xFF of
-        t | trapGetc == t -> pure ()
+        t | trapGetc == t -> do
+              r <- fromIntegral . ord <$> liftIO getChar
+              reg R0 .= r
+          | trapPuts == t -> do
+              v <- use (reg R0)
+              let loop x = do
+                    val <- memRead x
+                    unless (val == 0x0000) $ do
+                      let c = chr (fromIntegral val)
+                      liftIO (putChar c)
+                    loop (x+1)
+              loop v
+          | trapPutsp == t -> do
+              v <- use (reg R0)
+              let loop x = do
+                    val <- memRead x
+                    unless (val == 0x0000) $ do
+                      let char1 = chr (fromIntegral (val .&. 0xFF))
+                          char2 = chr (fromIntegral (val `shiftR` 8))
+                      liftIO $ mapM_ putChar [char1, char2]
+                    loop (x+1)
+              loop v
+          | trapOut == t -> do
+              liftIO . putChar =<<
+                chr . fromIntegral <$> use (reg R0)
+          | trapIn == t -> do
+              r <- fromIntegral . ord <$> liftIO getChar
+              reg R0 .= r
           | trapHalt == t -> do
               liftIO (putStrLn "HALT")
               status .= Halt
