@@ -2,3 +2,6 @@
 *.o
 *.hi
 dist/
+result/
+TAGS
+ctags
