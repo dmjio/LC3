@@ -271,7 +271,7 @@ dumpRegisters = do
       (V.zip (V.fromList [0..10]) r)
 
 debug :: Bool
-debug = False
+debug = True
 
 showBinary :: Word16 -> String
 showBinary x = "0b" ++ showIntAtBase 2 (head . show) x ""
@@ -486,7 +486,7 @@ data Trap
   deriving (Show, Eq)
 
 makeTrap :: Word16 -> Trap
-makeTrap instr
+makeTrap x
   | instr == trapGetc = Getc
   | instr == trapOut = Out
   | instr == trapPuts = Puts
@@ -494,6 +494,8 @@ makeTrap instr
   | instr == trapPutsp = PutsP
   | instr == trapHalt = Halt
   | otherwise = error "Bad TRAP"
+    where
+      instr = x .&. 0xFF
 
 go :: Routine ()
 go = do
@@ -612,7 +614,7 @@ go = do
           memWrite (r1' + offset) r0'
     TRAP -> do
       liftIO $ when debug $ print (toInstr instr :: Trap)
-      case makeTrap instr of
+      case makeTrap instr  of
           Getc -> do
               r <- fromIntegral . ord <$> liftIO getChar
               reg R0 .= r
