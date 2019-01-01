@@ -161,12 +161,12 @@ getKey = getChar
 
 checkKey :: IO (Maybe Word16)
 checkKey = do
-  result <- B.hGet stdin 2
+  result <- B.hGetNonBlocking stdin 1
   case result of
     x | B.null x -> pure Nothing
       | otherwise -> do
-          let [l,r] = B.unpack x
-          pure $ Just $ (merge l r)
+          let [l] = B.unpack x
+          pure $ Just $ fromIntegral l
         where
           go (l,r) x n
             | n < 8 = setBit x $ popCount (testBit r n)
@@ -211,9 +211,7 @@ readImageFile = do
       (origin:bytes) <- processBits . B.unpack <$> B.readFile fileName
       let pad = V.replicate (fromIntegral origin - 1) (0x0 :: Word16)
           mid = V.fromList (origin:bytes)
-          end = V.replicate
-            (65536 - (V.length pad + V.length mid)) (0x0 :: Word16)
-      -- V.mapM_ print $ (fmap getOp mid)
+          end = V.replicate (65536 - (V.length pad + V.length mid)) (0x0 :: Word16)
       pure $ Memory (pad <> mid <> end)
     _ -> do
       putStrLn "Please enter path to LC3 program"
@@ -226,8 +224,7 @@ type Routine = StateT Machine IO
 
 signExtend :: Word16 -> Int -> Word16
 signExtend x bitCount
-  | (x `shiftL` (bitCount - 1)) .&. 1 == 1
-  = x .|. (0xFFFF `shiftR` bitCount)
+  | x `shiftR` (bitCount - 1) .&. 1 == 1 = x .|. (0xFFFF `shiftL` bitCount)
   | otherwise = x
 
 updateFlags :: R -> Routine ()
@@ -237,9 +234,6 @@ updateFlags r = do
     z | z == 0 -> reg Cond .= zro
       | z ^. bitAt 15 -> reg Cond .= neg
       | otherwise -> reg Cond .= pos
-
-swap16 :: Word16 -> Word16
-swap16 x = x `shiftL` 8 .|. x `shiftR` 8
 
 toE :: Enum e => Word16 -> e
 toE = toEnum . fromIntegral
@@ -255,10 +249,8 @@ routine = do
   reg PC .= 0x3000
   fix $ \loop -> do
     s <- use status
-    unless (s == Halted) $ do
-      go
-      reg PC += 1
-      loop
+    unless (s == Halted)
+      (go >> loop)
 
 dumpRegisters :: Routine ()
 dumpRegisters = do
@@ -271,7 +263,7 @@ dumpRegisters = do
       (V.zip (V.fromList [0..10]) r)
 
 debug :: Bool
-debug = True
+debug = False
 
 showBinary :: Word16 -> String
 showBinary x = "0b" ++ showIntAtBase 2 (head . show) x ""
@@ -473,7 +465,7 @@ makeStr :: Word16 -> Str
 makeStr instr = do
   let r0 = toE $ (instr `shiftR` 9) .&. 0x7
       r1 = toE $ (instr `shiftR` 6) .&. 0x7
-      pcOffset = signExtend (instr .&. 0x3F) 9
+      pcOffset = signExtend (instr .&. 0x3F) 6
   Str r0 r1 pcOffset
 
 data Trap
@@ -501,6 +493,7 @@ go :: Routine ()
 go = do
   instr <- memRead =<< use (reg PC)
   when debug dumpRegisters
+  reg PC += 1
   case getOp instr of
     ADD -> do
       liftIO $ when debug $ print (toInstr instr :: Add)
@@ -557,7 +550,6 @@ go = do
         Jmp r -> do
           r1 <- use (reg r)
           reg PC .= r1
-          go
     JSR -> do
       liftIO $ when debug $ print (toInstr instr :: Jsr)
       case makeJsr instr of
@@ -614,7 +606,7 @@ go = do
           memWrite (r1' + offset) r0'
     TRAP -> do
       liftIO $ when debug $ print (toInstr instr :: Trap)
-      case makeTrap instr  of
+      case makeTrap instr of
           Getc -> do
               r <- fromIntegral . ord <$> liftIO getChar
               reg R0 .= r
@@ -622,11 +614,11 @@ go = do
               v <- use (reg R0)
               let loop x = do
                     val <- memRead x
-                    liftIO $ putStrLn ("val -> 0x" ++ showHex val "")
                     unless (val == 0x0000) $ do
                       let c = chr (fromIntegral val)
                       liftIO (putChar c)
                       loop (x+1)
+                      liftIO (hFlush stdout)
               loop v
           PutsP -> do
               v <- use (reg R0)
