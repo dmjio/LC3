@@ -103,7 +103,7 @@ status =
 
 data Status
   = Running
-  | Halt
+  | Halted
   deriving (Show, Eq)
 
 reg :: R -> Lens' Machine Word16
@@ -255,7 +255,7 @@ routine = do
   reg PC .= 0x3000
   fix $ \loop -> do
     s <- use status
-    unless (s == Halt) $ do
+    unless (s == Halted) $ do
       go
       reg PC += 1
       loop
@@ -271,7 +271,7 @@ dumpRegisters = do
       (V.zip (V.fromList [0..10]) r)
 
 debug :: Bool
-debug = True
+debug = False
 
 showBinary :: Word16 -> String
 showBinary x = "0b" ++ showIntAtBase 2 (head . show) x ""
@@ -477,17 +477,23 @@ makeStr instr = do
   Str r0 r1 pcOffset
 
 data Trap
-  = Trap
-  {
-  } deriving (Show, Eq)
-
-data TrapOp
-  = Putc
-  | Getc
+  = Getc
+  | Out
+  | Puts
+  | In
+  | PutsP
+  | Halt
+  deriving (Show, Eq)
 
 makeTrap :: Word16 -> Trap
-makeTrap instr = do
-  undefined
+makeTrap instr
+  | instr == trapGetc = Getc
+  | instr == trapOut = Out
+  | instr == trapPuts = Puts
+  | instr == trapIn = In
+  | instr == trapPutsp = PutsP
+  | instr == trapHalt = Halt
+  | otherwise = error "Bad TRAP"
 
 go :: Routine ()
 go = do
@@ -605,12 +611,12 @@ go = do
           r1' <- use (reg r1)
           memWrite (r1' + offset) r0'
     TRAP -> do
---      liftIO $ when debug $ print (toInstr instr :: Trap)
-      case instr .&. 0xFF of
-        t | trapGetc == t -> do
+      liftIO $ when debug $ print (toInstr instr :: Trap)
+      case makeTrap instr of
+          Getc -> do
               r <- fromIntegral . ord <$> liftIO getChar
               reg R0 .= r
-          | trapPuts == t -> do
+          Puts -> do
               v <- use (reg R0)
               let loop x = do
                     val <- memRead x
@@ -620,7 +626,7 @@ go = do
                       liftIO (putChar c)
                       loop (x+1)
               loop v
-          | trapPutsp == t -> do
+          PutsP -> do
               v <- use (reg R0)
               let loop x = do
                     val <- memRead x
@@ -630,21 +636,15 @@ go = do
                       liftIO $ mapM_ putChar [char1, char2]
                       loop (x+1)
               loop v
-          | trapOut == t -> do
+          Out -> do
               liftIO . putChar =<<
                 chr . fromIntegral <$> use (reg R0)
-          | trapIn == t -> do
+          In -> do
               r <- fromIntegral . ord <$> liftIO getChar
               reg R0 .= r
-          | trapHalt == t -> do
+          Halt -> do
               liftIO (putStrLn "HALT")
-              status .= Halt
-          | otherwise -> do
-              liftIO $ do
-                print (getOp instr)
-                print instr
-                exitFailure
-
+              status .= Halted
 
 pcStart :: Int
 pcStart = fromIntegral 0x3000
