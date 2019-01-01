@@ -167,10 +167,6 @@ checkKey = do
       | otherwise -> do
           let [l] = B.unpack x
           pure $ Just $ fromIntegral l
-        where
-          go (l,r) x n
-            | n < 8 = setBit x $ popCount (testBit r n)
-            | otherwise = setBit x $ popCount (testBit l n)
 
 memRead :: Addr -> Routine Val
 memRead (fromIntegral -> addr)

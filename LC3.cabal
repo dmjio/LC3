@@ -1,5 +1,5 @@
 name:                LC3
-version:             0.1.0.1
+version:             0.1.0.2
 synopsis:            LC-3 virtual machine
 description:         Haskell implementation of the LC-3 VM
 license:             BSD3
