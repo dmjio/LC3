@@ -735,7 +735,7 @@ addTwoNumbersImm :: SpecWith ()
 addTwoNumbersImm =
   it "Should ADD two numbers w/ immediate" $ do
     r <- runRoutine ma routine
-    r ^. reg R5 `shouldBe` 32
+    r ^. reg R5 `shouldBe` 0
       where
         ma = Machine rs me Running
         me = memory
