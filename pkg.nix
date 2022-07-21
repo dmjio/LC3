@@ -1,4 +1,4 @@
-{ mkDerivation, base, bytestring, hspec, lens, mtl, stdenv, vector
+{ mkDerivation, base, bytestring, hspec, lens, mtl, stdenv, vector, lib
 }:
 mkDerivation {
   pname = "LC3";
@@ -10,5 +10,5 @@ mkDerivation {
     base bytestring hspec lens mtl vector
   ];
   description = "LC-3 virtual machine";
-  license = stdenv.lib.licenses.bsd3;
+  license = lib.licenses.bsd3;
 }

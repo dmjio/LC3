@@ -123,13 +123,13 @@ machineMem =
 registers :: forall n . n ~ 11 => Registers n
 registers = Registers (V.replicate n 0x0)
   where
-    n = fromIntegral $ natVal (Proxy @ n)
+    n = fromIntegral $ natVal (Proxy @n)
 
 memory :: forall n . n ~ 65536 => Memory n
 memory = Memory (V.replicate n 0x0)
   where
     n :: Int
-    n = fromIntegral $ natVal (Proxy @ n)
+    n = fromIntegral $ natVal (Proxy @n)
 
 data OpCode
   = BR  -- /* branch */
