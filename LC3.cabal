@@ -5,8 +5,8 @@ description:         Haskell implementation of the LC-3 VM
 license:             BSD3
 license-file:        LICENSE
 author:              David Johnson
-maintainer:          djohnson.m@gmail.com
-copyright:           David Johnson (c) 2019
+maintainer:          code@dmj.io
+copyright:           David Johnson (c) 2025
 category:            Language
 build-type:          Simple
 extra-source-files:  README.md
